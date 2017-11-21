@@ -95,7 +95,9 @@ uint8_t whiteBrightness = 255;
 CHSV currentColor;
 
 // How long the light in ms shall stay on
-#define TIMER_ON 30000
+#define TIMER_ON 50000
+uint32_t tempTimerExtension = 0;
+
 // Below what lux the leds shall be turned on
 uint16_t LightThreshold = 10;
 
@@ -380,11 +382,17 @@ int evalIRCode()
 			ChangeRGBColor(HUE_PINK + 24, 255, 255); break;
 		case IR_SomeBlue:
 			ChangeRGBColor(HUE_PINK + 31, 255, 255); break;
-		case IR_UPR: break;
+		case IR_UPR: 
+			tempTimerExtension = 900000;
+			FlashWhite(1);
+			break;
 		case IR_UPG: break;
 		case IR_UPB: break;
 		case IR_QUICK: break;
 		case IR_DOWNR: break;
+			tempTimerExtension = 0;
+			FlashWhite(2);
+			break;
 		case IR_DOWNG: break;
 		case IR_DOWNB: break;
 		case IR_SLOW: break;
@@ -550,7 +558,7 @@ void FlashWhite(int amount)
 		analogWrite(WhiteLedPIN, 255);
 		delay(200);
 	}
-	analogWrite(WhiteLedPIN, 0);
+	analogWrite(WhiteLedPIN, whiteBrightness);
 	Serial.println("");
 }
 

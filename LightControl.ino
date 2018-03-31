@@ -8,6 +8,9 @@ Author:  Daniel & Daniel
 #include <BH1750.h>
 #include <FastLED.h>
 
+
+#define PRINTLN(var) Serial.print(#var ": "); Serial.println(var)
+
 // real rgb
 #define IR_BPlus  0xFF3AC5  // 
 #define IR_BMinus 0xFFBA45  // 
@@ -87,7 +90,8 @@ Author:  Daniel & Daniel
 #define HUE_DELTA 0.01
 #define RAND_MAX  255;
 
-
+// How long the leds shall be on when ON Button is pressed
+#define forceOnDuration 3600000;
 // WhiteLED
 uint8_t lastBrightness = 0;
 uint8_t whiteBrightness = 255;
@@ -107,7 +111,7 @@ unsigned long StartTime = 0;
 // Timestamp when motion was captured
 unsigned long LastDetectionTime = 0;
 
-// Is the thing on?
+// Are the LEDs on?
 bool isOn = false;
 
 // are the rgb leds on?
@@ -116,6 +120,8 @@ bool isRGBon = false;
 // State where settings can be changed (light threshold) or sensor input visualized
 bool SetupModeEnabled = false;
 
+// is the system running -> reacting to movement? (is toggled with ON/OFF Button)
+bool isActive = true;
 
 enum colormode { staticColor, flashing, rainbow, randomcolor };
 colormode currentMode;
@@ -129,6 +135,9 @@ unsigned long lastanimation = 0;
 int isStroboOn = false;
 // current hue (for rainbow animation)
 int rainbowHue = 0;
+
+// light is forced on until timestamp (button pressed)
+unsigned long ForceOnUntil = 0;
 
 IRsend irsend(IRledPin);
 IRrecv irrecv(IRrecPin);
@@ -165,18 +174,19 @@ void setup() {
 // the loop function runs over and over again until power down or reset
 void loop()
 {
+
 	unsigned long elapsedTime = millis();
 
 	bool movementDetected = checkMovement();
 
 	// Normal Mode
-	if (movementDetected && !SetupModeEnabled)
+	if (movementDetected && isActive)
 	{
 		movementDetected = false;
 
 		LastDetectionTime = elapsedTime;
-		Serial.print("NewTime: ");
-		Serial.println(LastDetectionTime);
+		//Serial.print("NewTime: ");
+		//Serial.println(LastDetectionTime);
 
 		// if the LEDS are off...
 		if (!isOn)
@@ -206,55 +216,50 @@ void loop()
 			{
 				TimerExtension = ((float)(2.0f / 7.0f)* diff) + ((float)(5.0f / 7.0f) * 60000) - 30000;
 			}
-			//Serial.print("Diff:");
-			//Serial.print(diff);
-
-			//Serial.print(" -> TimerExtension update:");
-			//Serial.println(TimerExtension);
+			
 
 
-			// if an animated color mode is active
-			if (currentColor != staticColor && elapsedTime > lastanimation + animationspeed)
-			{
-				switch (currentMode)
-				{
-				case flashing:
-					if (isStroboOn)
-					{
-						Serial.println("STROBO AUS");
-						analogWrite(WhiteLedPIN, 0);
-						ChangeRGBColor(HUE_RED, 255, 0);
-						isStroboOn = false;
-					}
-					else
-					{
-						Serial.println("STROBO AN");
-						analogWrite(WhiteLedPIN, 255);
-						ChangeRGBColor(HUE_RED, 255, 255);
-						isStroboOn = true;
-					}
-					break;
-				case randomcolor:
-					ChangeRGBColor(random(0, 255), 255, 255);
-					break;
-				case rainbow:
-					rainbowHue %= 255;
-					rainbowHue += 1;
-					ChangeRGBColor(rainbowHue, 255, 255);
-					break;
-				default:
-					break;
-				}
-				lastanimation = elapsedTime;
-			}
 		}
 	}
-	// If TIMER_ON has elapsed (no movement detected for the TIMER_ON duration) turn the whole thing off (also handles rollover)
-	else if (((unsigned long)(elapsedTime - LastDetectionTime) > DEFAULT_TIMER_ON + TimerExtension) && isOn)
+	// If TIMER_ON has elapsed  and also ForceOnUntil (if set) has been reached (no movement detected for the TIMER_ON duration) turn the whole thing off (also handles rollover)
+	else if (((unsigned long)(elapsedTime - LastDetectionTime) > DEFAULT_TIMER_ON + TimerExtension) && elapsedTime > ForceOnUntil && isOn)
 	{
 		TurnFullOff();
 	}
 
+	if (isOn && currentMode != staticColor && elapsedTime > lastanimation + animationspeed)
+	{
+		// if an animated color mode is active
+		Serial.println(isStroboOn);
+
+		switch (currentMode)
+		{
+		case flashing:
+			if (isStroboOn)
+			{
+				analogWrite(WhiteLedPIN, 0);
+				ChangeRGBColor(currentColor.h, currentColor.s, 0);
+			}
+			else
+			{
+				analogWrite(WhiteLedPIN, 255);
+				ChangeRGBColor(currentColor.h, currentColor.s, 255);
+			}
+			isStroboOn = !isStroboOn;
+			break;
+		case randomcolor:
+			ChangeRGBColor(random(0, 255), 255, 255);
+			break;
+		case rainbow:
+			rainbowHue %= 255;
+			rainbowHue += 1;
+			ChangeRGBColor(rainbowHue, 255, 255);
+			break;
+		default:
+			break;
+		}
+		lastanimation = elapsedTime;
+	}
 
 
 	if (readIRCode())
@@ -267,40 +272,66 @@ void loop()
 // toggles both RGB and white LEDs
 void ToggleFull()
 {
+
 	if (isOn)
 	{
+		isActive = false;
+		Serial.println("togglefull");
+		Serial.println(isActive);
+		PRINTLN(isActive);
+		//Turn everything off and ignore movement
 		TurnFullOff();
 	}
 	else
 	{
+		isActive = true;
+		PRINTLN(isActive);
+
 		TurnFullOn();
 	}
 
 
 }
 
-void TurnFullOn()
+int TurnFullOn()
 {
+	isActive = true;
+	Serial.println("TurnFullOn");
+	currentMode = staticColor;
 	SetRGBtoCurrColor();
 	FadeWhite();
 	isOn = true;
+	return 0;
 }
 
 void TurnFullOff()
 {
 	Serial.println("OFF");
+	// could become bigger than current time in case of rollover
+	ForceOnUntil = 0;
 	int tempBrightness = whiteBrightness;
 	TurnWhiteOff();
-	delay(2000);
-	if (!checkMovement())
+	unsigned long delaytimer = millis();
+	bool interrupted = false;
+	Serial.println("turnfulloff");
+	PRINTLN(isActive);
+
+	while (millis() < delaytimer + 3000)
+	{
+		if (checkMovement() && isActive == true)
+		{
+			PRINTLN(isActive);
+			Serial.println("Turn Off Disrupted");
+			whiteBrightness = tempBrightness;
+			FadeWhite();
+			interrupted = true;
+			return;
+		}
+	}
+	if (!interrupted)
 	{
 		TurnRGBOff();
 		isOn = false;
-	}
-	else
-	{
-		whiteBrightness = tempBrightness;
-		FadeWhite();
 	}
 }
 
@@ -308,9 +339,9 @@ void TurnFullOff()
 uint16_t readLux()
 {
 	uint16_t lux = lightMeter.readLightLevel();
-	Serial.print("Light: ");
-	Serial.print(lux);
-	Serial.println(" lx");
+	//Serial.print("Light: ");
+	//Serial.print(lux);
+	//Serial.println(" lx");
 	return lux;
 }
 
@@ -343,10 +374,12 @@ bool readIRCode()
 
 int evalIRCode()
 {
-
+	if (!isActive && results.value != IR_ONOFF)
+	{
+		return 0;
+	}
 	switch (results.value)
 	{
-
 	case IR_BPlus:
 		if (whiteBrightness <= 223)
 			whiteBrightness += 32;
@@ -365,61 +398,122 @@ int evalIRCode()
 		ToggleFull();
 		break;
 	case IR_PLAY:
-		currentMode = staticColor;
-		ChangeRGBColor(HUE_ORANGE, 255, 255); break;
-		FadeWhite();
+		ForceOnUntil = millis() + 3600000;
+		Serial.print(millis());
+		Serial.print(" until: ");
+		Serial.println(ForceOnUntil);
+		Serial.println(isOn);
+
+		FlashWhite(1);
+		if (isOn == true)
+		{
+			Serial.println("test");
+		}
+		else
+		{
+			Serial.println("abc");
+			TurnFullOn;
+		}
+		if (isOn == false)
+		{
+		}
+		Serial.println("#forceOnDuration");
 		break;
 	case IR_Red:
-		ChangeRGBColor(HUE_RED, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_RED, 255, 255);
+		FadeWhite();
+		break;
 	case IR_Green:
-		ChangeRGBColor(HUE_GREEN, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_GREEN, 255, 255);
+		FadeWhite(); break;
 	case IR_Blue:
-		ChangeRGBColor(HUE_BLUE, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_BLUE, 255, 255);
+		FadeWhite(); break;
 	case IR_White:
-		ChangeRGBColor(0, 0, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(0, 0, 255);
+		FadeWhite(); break;
 	case IR_NearlyRed:
-		ChangeRGBColor(8, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(8, 255, 255);
+		FadeWhite(); break;
 	case IR_RedOrange:
-		ChangeRGBColor(14, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(14, 255, 255);
+		FadeWhite(); break;
 	case IR_Orange:
-		ChangeRGBColor(HUE_ORANGE, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_ORANGE, 255, 255);
+		FadeWhite(); break;
 	case IR_Yellow:
-		ChangeRGBColor(HUE_YELLOW, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_YELLOW, 255, 255);
+		FadeWhite(); break;
 	case IR_LightGreen:
-		ChangeRGBColor(HUE_GREEN + 16, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_GREEN + 16, 255, 255);
+		FadeWhite(); break;
 	case IR_SeaBlue:
-		ChangeRGBColor(HUE_GREEN + 32, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_GREEN + 32, 255, 255);
+		FadeWhite(); break;
 	case IR_BlueTurquois:
-		ChangeRGBColor(HUE_GREEN + 48, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_GREEN + 48, 255, 255);
+		FadeWhite(); break;
 	case IR_GreenBlue:
-		ChangeRGBColor(HUE_GREEN + 56, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_GREEN + 56, 255, 255);
+		FadeWhite(); break;
 	case IR_LightBlue:
-		ChangeRGBColor(HUE_BLUE + 16, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_BLUE + 16, 255, 255);
+		FadeWhite(); break;
 	case IR_Violet:
-		ChangeRGBColor(HUE_BLUE + 32, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_BLUE + 32, 255, 255);
+		FadeWhite(); break;
 	case IR_DarkViolet:
-		ChangeRGBColor(HUE_BLUE + 40, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_BLUE + 40, 255, 255);
+		FadeWhite(); break;
 	case IR_Pink:
-		ChangeRGBColor(HUE_PINK, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_PINK, 255, 255);
+		FadeWhite(); break;
 	case IR_LightPink:
-		ChangeRGBColor(HUE_PINK + 8, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_PINK + 8, 255, 255);
+		FadeWhite(); break;
 	case IR_SortofPink:
-		ChangeRGBColor(HUE_PINK + 16, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_PINK + 16, 255, 255);
+		FadeWhite(); break;
 	case IR_lighterBlue:
-		ChangeRGBColor(HUE_PINK + 24, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_PINK + 24, 255, 255);
+		FadeWhite(); break;
 	case IR_SomeBlue:
-		ChangeRGBColor(HUE_PINK + 31, 255, 255); break;
+		currentMode = staticColor;
+		ChangeRGBColor(HUE_PINK + 31, 255, 255);
+		FadeWhite(); break;
 	case IR_UPR:
-		//tempTimerExtension = 900000;
+		//ForceOnUntil = millis();
 		//FlashWhite(1);
 		break;
 	case IR_UPG: break;
 	case IR_UPB: break;
 	case IR_QUICK:
-		if (animationspeed - 10 > 1)
-			animationspeed -= 10;
-		else
+		animationspeed -= 25;
+
+		if (animationspeed < 1)
 			animationspeed = 1;
+
+		PRINTLN(animationspeed);
+
 		break;
 	case IR_DOWNR: break;
 		//tempTimerExtension = 0;
@@ -427,11 +521,13 @@ int evalIRCode()
 		break;
 	case IR_DOWNG: break;
 	case IR_DOWNB: break;
-	case IR_SLOW: break;
+	case IR_SLOW: 
 		if (animationspeed + 10 < 200)
-			animationspeed += 10;
+			animationspeed += 25;
 		else
 			animationspeed = 200;
+
+		PRINTLN(animationspeed);
 		break;
 	case IR_DIY1:
 		ToggleRGB();
@@ -449,7 +545,7 @@ int evalIRCode()
 	case IR_DIY6: break;
 	case IR_FLASH:
 		currentMode = flashing;
-		isStroboOn = false;
+		isStroboOn = true;
 		break;
 	case IR_JUMP3: break;
 	case IR_JUMP7:
@@ -457,9 +553,7 @@ int evalIRCode()
 	case IR_FADE3: break;
 	case IR_FADE7:
 		currentMode = rainbow;
-
 		break;
-
 	}
 
 
@@ -473,10 +567,10 @@ bool checkMovement()
 
 	if (moveState_1 == HIGH || moveState_2 == HIGH)
 	{
-		if (moveState_1 == HIGH)
+		/*if (moveState_1 == HIGH)
 			Serial.println("MotionOn1");
 		if (moveState_2 == HIGH)
-			Serial.println("MotionOn2");
+			Serial.println("MotionOn2");*/
 
 		return true;
 	}
@@ -486,8 +580,8 @@ bool checkMovement()
 
 void FadeWhite()
 {
-	Serial.println("Turn White ON");
-
+	Serial.println("fading white");
+	
 	int step = 2;
 
 	if (whiteBrightness > lastBrightness)
@@ -534,6 +628,7 @@ void TurnWhiteOff()
 
 void ChangeRGBColor(uint8_t hue, uint8_t saturation, uint8_t value)
 {
+	isActive = true;
 	currentColor.setHSV(hue, saturation, value);
 	SetRGBtoCurrColor();
 }
@@ -604,8 +699,9 @@ void FlashWhite(int amount)
 		Serial.print("flash");
 		analogWrite(WhiteLedPIN, 0);
 		delay(200);
-		analogWrite(WhiteLedPIN, 255);
+		analogWrite(WhiteLedPIN, 155);
 		delay(200);
+		analogWrite(WhiteLedPIN, 0);
 	}
 	analogWrite(WhiteLedPIN, whiteBrightness);
 	Serial.println("");
@@ -642,6 +738,9 @@ void DecreaseThreshold()
 	Serial.println(LightThreshold);
 
 }
+
+#pragma region Infrared
+
 
 
 #define NEC_BIT_COUNT 32
@@ -808,3 +907,4 @@ void space(unsigned int sLen) { //uses sigTime as end parameter
 	while ((micros() - now) < dur); //just wait here until time is up
 }
 
+#pragma endregion
